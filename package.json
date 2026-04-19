@@ -1,0 +1,24 @@
+{
+  "name": "online-blackjack-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Realtime server for online-blackjack. Run alongside Next: set CORS_ORIGIN to your app URL (default http://localhost:3000), PORT=3001, then npm run dev. Next app uses NEXT_PUBLIC_SOCKET_URL.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
