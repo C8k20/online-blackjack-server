@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { createDeck, handValue, shuffle } from "./deck.js";
 import type { GamePhase, PlayerSnapshot, RoomSnapshot } from "./types.js";
+import type { Store } from "./store.js";
 
 export type RoomPlayer = {
   id: string;
   socketId: string;
+  userId: string;
   name: string;
   hand: string[];
   bust: boolean;
   stood: boolean;
+  chips: number;
+  bet: number;
 };
 
 export class GameRoom {
@@ -19,25 +23,30 @@ export class GameRoom {
   deck: string[] = [];
   currentPlayerId: string | null = null;
   outcomeMessage = "";
+  private betsSettled = false;
 
   constructor(code: string) {
     this.code = code;
   }
 
-  addPlayer(socketId: string, name: string): RoomPlayer {
+  addPlayer(socketId: string, userId: string, name: string, store: Store): RoomPlayer {
+    const chips = store.getChips(userId) ?? 0;
     const p: RoomPlayer = {
       id: randomUUID(),
       socketId,
+      userId,
       name: name.trim().slice(0, 24) || "Player",
       hand: [],
       bust: false,
       stood: false,
+      chips,
+      bet: 0,
     };
     this.players.push(p);
     return p;
   }
 
-  removePlayerBySocket(socketId: string): RoomPlayer | undefined {
+  removePlayerBySocket(socketId: string, store: Store): RoomPlayer | undefined {
     const idx = this.players.findIndex((p) => p.socketId === socketId);
     if (idx === -1) return undefined;
     const [removed] = this.players.splice(idx, 1);
@@ -45,7 +54,7 @@ export class GameRoom {
       this.hostPlayerId = this.players[0].id;
     }
     if (this.phase === "playing") {
-      this.applyDisconnectMidGame(removed.id);
+      this.applyDisconnectMidGame(removed.id, store);
     }
     return removed;
   }
@@ -93,6 +102,8 @@ export class GameRoom {
       return {
         id: p.id,
         name: p.name,
+        chips: p.chips,
+        bet: p.bet,
         hand: [],
         concealedCount: p.hand.length,
         bust: p.bust,
@@ -103,6 +114,8 @@ export class GameRoom {
     return {
       id: p.id,
       name: p.name,
+      chips: p.chips,
+      bet: p.bet,
       hand: [...p.hand],
       concealedCount: 0,
       bust: p.bust,
@@ -111,7 +124,45 @@ export class GameRoom {
     };
   }
 
-  startGame(socketId: string): { ok: true } | { ok: false; error: string } {
+  setBet(
+    socketId: string,
+    amount: number,
+    store: Store,
+  ): { ok: true } | { ok: false; error: string } {
+    const p = this.getPlayerBySocket(socketId);
+    if (!p) return { ok: false, error: "Not in a room." };
+    if (!(this.phase === "lobby" || this.phase === "finished")) {
+      return { ok: false, error: "You can only bet before a hand starts." };
+    }
+    const a = Math.floor(Number(amount));
+    if (!Number.isFinite(a) || a < 0) return { ok: false, error: "Invalid bet amount." };
+
+    // Refund previous bet first.
+    if (p.bet > 0) {
+      store.addChips(p.userId, p.bet);
+      p.bet = 0;
+    }
+
+    if (a === 0) {
+      p.chips = store.getChips(p.userId) ?? p.chips;
+      return { ok: true };
+    }
+
+    const r = store.addChips(p.userId, -a);
+    if (!r.ok) return { ok: false, error: r.error };
+    p.bet = a;
+    p.chips = r.chips;
+    return { ok: true };
+  }
+
+  private refreshChips(store: Store) {
+    for (const p of this.players) {
+      const c = store.getChips(p.userId);
+      if (c != null) p.chips = c;
+    }
+  }
+
+  startGame(socketId: string, store: Store): { ok: true } | { ok: false; error: string } {
     if (!this.isHostSocket(socketId)) {
       return { ok: false, error: "Only the host can start the game." };
     }
@@ -121,8 +172,13 @@ export class GameRoom {
     if (this.phase === "playing") {
       return { ok: false, error: "A game is already in progress." };
     }
+    this.refreshChips(store);
+    if (this.players.some((p) => p.bet <= 0)) {
+      return { ok: false, error: "Everyone must place a bet before the game can start." };
+    }
     this.resetRoundState();
     this.phase = "playing";
+    this.betsSettled = false;
     this.outcomeMessage = "";
     this.deck = shuffle(createDeck());
     for (const p of this.players) {
@@ -138,11 +194,11 @@ export class GameRoom {
       }
     }
     this.currentPlayerId = this.firstStillDecidingId();
-    this.maybeResolveInstantWin();
+    this.maybeResolveInstantWin(store);
     return { ok: true };
   }
 
-  nextGame(socketId: string): { ok: true } | { ok: false; error: string } {
+  nextGame(socketId: string, store: Store): { ok: true } | { ok: false; error: string } {
     if (!this.isHostSocket(socketId)) {
       return { ok: false, error: "Only the host can start the next game." };
     }
@@ -155,10 +211,10 @@ export class GameRoom {
       this.currentPlayerId = null;
       return { ok: false, error: "Need at least two players." };
     }
-    return this.startGame(socketId);
+    return this.startGame(socketId, store);
   }
 
-  hit(socketId: string): { ok: true } | { ok: false; error: string } {
+  hit(socketId: string, store: Store): { ok: true } | { ok: false; error: string } {
     const p = this.getPlayerBySocket(socketId);
     if (!p || this.phase !== "playing") {
       return { ok: false, error: "Cannot hit right now." };
@@ -176,12 +232,12 @@ export class GameRoom {
     p.hand.push(card);
     if (handValue(p.hand) > 21) {
       p.bust = true;
-      this.afterPlayerLeavesTurn(p.id);
+      this.afterPlayerLeavesTurn(p.id, store);
     }
     return { ok: true };
   }
 
-  stand(socketId: string): { ok: true } | { ok: false; error: string } {
+  stand(socketId: string, store: Store): { ok: true } | { ok: false; error: string } {
     const p = this.getPlayerBySocket(socketId);
     if (!p || this.phase !== "playing") {
       return { ok: false, error: "Cannot stand right now." };
@@ -193,7 +249,7 @@ export class GameRoom {
       return { ok: false, error: "You are already out this round." };
     }
     p.stood = true;
-    this.afterPlayerLeavesTurn(p.id);
+    this.afterPlayerLeavesTurn(p.id, store);
     return { ok: true };
   }
 
@@ -226,13 +282,13 @@ export class GameRoom {
     return next.id;
   }
 
-  private afterPlayerLeavesTurn(leftPlayerId: string) {
-    this.maybeResolveInstantWin();
+  private afterPlayerLeavesTurn(leftPlayerId: string, store: Store) {
+    this.maybeResolveInstantWin(store);
     if (this.phase !== "playing") return;
 
     const deciding = this.stillDeciding();
     if (deciding.length === 0) {
-      this.finishByStanding();
+      this.finishByStanding(store);
       return;
     }
 
@@ -240,12 +296,81 @@ export class GameRoom {
     this.currentPlayerId = nextId;
   }
 
-  private maybeResolveInstantWin() {
+  private settleBets(store: Store) {
+    if (this.betsSettled) return;
+    if (this.phase !== "finished") return;
+    this.betsSettled = true;
+
+    // Determine winners/ties from the final room state.
+    const alive = this.alive();
+    if (alive.length === 0) {
+      // Everyone busted -> no change, refund all bets.
+      for (const p of this.players) {
+        if (p.bet > 0) {
+          const r = store.addChips(p.userId, p.bet);
+          if (r.ok) p.chips = r.chips;
+          p.bet = 0;
+        }
+      }
+      return;
+    }
+
+    if (alive.length === 1) {
+      const w = alive[0];
+      // Winner gets profit equal to their bet => they receive 2*bet back (stake + winnings).
+      const prize = w.bet * 2;
+      if (prize > 0) {
+        const r = store.addChips(w.userId, prize);
+        if (r.ok) w.chips = r.chips;
+      }
+      w.bet = 0;
+      // Losers already paid by staking their bet (no refund).
+      for (const p of this.players) {
+        if (p.id !== w.id) p.bet = 0;
+      }
+      return;
+    }
+
+    const scores = alive.map((p) => ({ p, v: handValue(p.hand) }));
+    const best = Math.max(...scores.map((s) => s.v));
+    const top = scores.filter((s) => s.v === best).map((s) => s.p);
+
+    if (top.length >= 2) {
+      // Tie -> top players get their chips back (no change).
+      for (const p of top) {
+        if (p.bet > 0) {
+          const r = store.addChips(p.userId, p.bet);
+          if (r.ok) p.chips = r.chips;
+        }
+        p.bet = 0;
+      }
+      // Others lose their bet (already staked).
+      for (const p of this.players) {
+        if (!top.some((t) => t.id === p.id)) p.bet = 0;
+      }
+      return;
+    }
+
+    // Single winner in multi-alive case.
+    const w = top[0];
+    const prize = w.bet * 2;
+    if (prize > 0) {
+      const r = store.addChips(w.userId, prize);
+      if (r.ok) w.chips = r.chips;
+    }
+    w.bet = 0;
+    for (const p of this.players) {
+      if (p.id !== w.id) p.bet = 0;
+    }
+  }
+
+  private maybeResolveInstantWin(store: Store) {
     const alive = this.alive();
     if (alive.length === 0) {
       this.phase = "finished";
       this.outcomeMessage = "Everyone busted. No winner.";
       this.currentPlayerId = null;
+      this.settleBets(store);
       return;
     }
     if (alive.length === 1) {
@@ -253,15 +378,17 @@ export class GameRoom {
       this.phase = "finished";
       this.outcomeMessage = `${w.name} wins — last player standing (${handValue(w.hand)}).`;
       this.currentPlayerId = null;
+      this.settleBets(store);
     }
   }
 
-  private finishByStanding() {
+  private finishByStanding(store: Store) {
     const alive = this.alive();
     if (alive.length === 0) {
       this.phase = "finished";
       this.outcomeMessage = "No winner.";
       this.currentPlayerId = null;
+      this.settleBets(store);
       return;
     }
     if (alive.length === 1) {
@@ -269,6 +396,7 @@ export class GameRoom {
       this.phase = "finished";
       this.outcomeMessage = `${w.name} wins (${handValue(w.hand)}).`;
       this.currentPlayerId = null;
+      this.settleBets(store);
       return;
     }
     const scores = alive.map((p) => ({ p, v: handValue(p.hand) }));
@@ -282,9 +410,10 @@ export class GameRoom {
     } else {
       this.outcomeMessage = `${top[0].p.name} wins with ${best}.`;
     }
+    this.settleBets(store);
   }
 
-  private applyDisconnectMidGame(leftPlayerId: string) {
+  private applyDisconnectMidGame(leftPlayerId: string, store: Store) {
     if (this.players.length === 0) {
       this.phase = "lobby";
       this.currentPlayerId = null;
@@ -301,16 +430,17 @@ export class GameRoom {
         this.outcomeMessage = "No winner.";
       }
       this.currentPlayerId = null;
+      this.settleBets(store);
       return;
     }
     if (this.currentPlayerId === leftPlayerId) {
       const next = this.firstStillDecidingId();
       this.currentPlayerId = next;
     }
-    this.maybeResolveInstantWin();
+    this.maybeResolveInstantWin(store);
     if (this.phase !== "playing") return;
     if (this.stillDeciding().length === 0) {
-      this.finishByStanding();
+      this.finishByStanding(store);
     }
   }
 }

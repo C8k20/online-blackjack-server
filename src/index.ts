@@ -7,14 +7,51 @@ import cors from "cors";
 import express from "express";
 import { Server, type Socket } from "socket.io";
 import { GameRoom } from "./gameRoom.js";
+import { Store } from "./store.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 
 const app = express();
+app.use(express.json());
 app.use(cors({ origin: CORS_ORIGIN }));
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+const store = new Store();
+
+function bearerToken(req: express.Request): string | null {
+  const h = String(req.header("authorization") ?? "");
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1] : null;
+}
+
+app.post("/auth/register", (req, res) => {
+  const r = store.register(req.body?.username, req.body?.password);
+  if (!r.ok) return res.status(400).json({ ok: false, error: r.error });
+  return res.json({ ok: true, token: r.token, userId: r.userId });
+});
+
+app.post("/auth/login", (req, res) => {
+  const r = store.login(req.body?.username, req.body?.password);
+  if (!r.ok) return res.status(400).json({ ok: false, error: r.error });
+  return res.json({ ok: true, token: r.token, userId: r.userId });
+});
+
+app.post("/auth/logout", (req, res) => {
+  const t = bearerToken(req);
+  if (t) store.logout(t);
+  return res.json({ ok: true });
+});
+
+app.get("/me", (req, res) => {
+  const t = bearerToken(req);
+  const userId = store.userIdForToken(t);
+  if (!userId) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  const user = store.getUser(userId);
+  if (!user) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  return res.json({ ok: true, userId: user.id, username: user.username, chips: user.chips });
 });
 
 const server = http.createServer(app);
@@ -58,7 +95,7 @@ function leaveRoom(socket: Socket) {
     socket.data.roomCode = undefined;
     return;
   }
-  room.removePlayerBySocket(socket.id);
+  room.removePlayerBySocket(socket.id, store);
   socket.leave(code);
   socket.data.roomCode = undefined;
   socket.data.playerId = undefined;
@@ -71,6 +108,9 @@ function leaveRoom(socket: Socket) {
 
 io.on("connection", (socket) => {
   socket.data.roomCode = undefined;
+  const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
+  const userId = store.userIdForToken(typeof token === "string" ? token : null);
+  socket.data.userId = userId ?? undefined;
 
   socket.on("disconnect", () => {
     leaveRoom(socket);
@@ -83,10 +123,14 @@ io.on("connection", (socket) => {
 
   socket.on("room:create", (displayName: string, ack?: (e: unknown) => void) => {
     try {
+      if (!socket.data.userId) {
+        ack?.("You must be logged in to create a room.");
+        return;
+      }
       leaveRoom(socket);
       const code = createUniqueRoomCode();
       const room = new GameRoom(code);
-      const host = room.addPlayer(socket.id, String(displayName ?? ""));
+      const host = room.addPlayer(socket.id, socket.data.userId, String(displayName ?? ""), store);
       room.hostPlayerId = host.id;
       rooms.set(code, room);
       socket.join(code);
@@ -106,6 +150,10 @@ io.on("connection", (socket) => {
   socket.on(
     "room:join",
     (payload: { code?: string; displayName?: string }, ack?: (e: unknown) => void) => {
+      if (!socket.data.userId) {
+        ack?.("You must be logged in to join a room.");
+        return;
+      }
       const raw = payload?.code ?? "";
       const code = raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
       const name = String(payload?.displayName ?? "");
@@ -119,7 +167,7 @@ io.on("connection", (socket) => {
         return;
       }
       leaveRoom(socket);
-      const p = room.addPlayer(socket.id, name);
+      const p = room.addPlayer(socket.id, socket.data.userId, name, store);
       socket.join(code);
       socket.data.roomCode = code;
       socket.data.playerId = p.id;
@@ -139,7 +187,7 @@ io.on("connection", (socket) => {
       ack?.("Not in a room.");
       return;
     }
-    const r = room.startGame(socket.id);
+    const r = room.startGame(socket.id, store);
     if (!r.ok) {
       ack?.(r.error);
       return;
@@ -155,7 +203,7 @@ io.on("connection", (socket) => {
       ack?.("Not in a room.");
       return;
     }
-    const r = room.nextGame(socket.id);
+    const r = room.nextGame(socket.id, store);
     if (!r.ok) {
       ack?.(r.error);
       void broadcastRoom(room);
@@ -172,7 +220,7 @@ io.on("connection", (socket) => {
       ack?.("Not in a room.");
       return;
     }
-    const r = room.hit(socket.id);
+    const r = room.hit(socket.id, store);
     if (!r.ok) {
       ack?.(r.error);
       return;
@@ -188,7 +236,23 @@ io.on("connection", (socket) => {
       ack?.("Not in a room.");
       return;
     }
-    const r = room.stand(socket.id);
+    const r = room.stand(socket.id, store);
+    if (!r.ok) {
+      ack?.(r.error);
+      return;
+    }
+    void broadcastRoom(room);
+    ack?.(null);
+  });
+
+  socket.on("bet:set", (amount: number, ack?: (e: unknown) => void) => {
+    const code = socket.data.roomCode as string | undefined;
+    const room = code ? rooms.get(code) : undefined;
+    if (!room) {
+      ack?.("Not in a room.");
+      return;
+    }
+    const r = room.setBet(socket.id, amount, store);
     if (!r.ok) {
       ack?.(r.error);
       return;
