@@ -1,0 +1,30 @@
+{
+  "users": [
+    {
+      "id": "59a16f92-c54f-4826-8e5d-623646529624",
+      "username": "testuser1",
+      "passwordSalt": "db3c9ce6436493a560f3527eebb6eca7",
+      "passwordHash": "c1386ad9e55ccab9a180bceb599a56296653cbd71146a9d80f51d14c03455015",
+      "chips": 1000
+    },
+    {
+      "id": "fe8fc43b-3603-4cb8-a4aa-d68ec3f1ec7d",
+      "username": "testuser2",
+      "passwordSalt": "08dfabb009e6a30368a205d88bc418c2",
+      "passwordHash": "cc645a1277f816f747b15c6466e76c79e6c60437ef33f3114e80c749b9024d0e",
+      "chips": 1000
+    }
+  ],
+  "sessions": [
+    {
+      "token": "318a0dd0-0c84-46f3-99e9-72b4922747a4",
+      "userId": "59a16f92-c54f-4826-8e5d-623646529624",
+      "createdAtMs": 1776652411239
+    },
+    {
+      "token": "3c8e3b82-49d3-4ed6-9d33-a50d46002806",
+      "userId": "fe8fc43b-3603-4cb8-a4aa-d68ec3f1ec7d",
+      "createdAtMs": 1776652420971
+    }
+  ]
+}
