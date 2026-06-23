@@ -31,6 +31,22 @@
       "passwordHash": "85a5749252ddedb73b2c184aab851672e2093709a984edb2bb3d5db9946a74ee",
       "chips": 1026,
       "rankPoints": 0
+    },
+    {
+      "id": "d15129c2-e4fc-4d87-8207-d8f1f9bb6274",
+      "username": "testuser99",
+      "passwordSalt": "7169b23ed0c81bcbb7aec02044033783",
+      "passwordHash": "b19b289bf38b3250467bccd32796cc171ab45339204a6d7d21cb17f5a09d7516",
+      "chips": 1000,
+      "rankPoints": 0
+    },
+    {
+      "id": "bc6dab1a-eec4-4d81-a8e9-742ea280da65",
+      "username": "a123",
+      "passwordSalt": "b2d78dbd6cfff236791e2bb9db9b8835",
+      "passwordHash": "2c0c13cd2469505f8a9b551e3ba3fb9a5831b1a3e9b72feb2e8a610cab485",
+      "chips": 1000,
+      "rankPoints": 0
     }
   ],
   "sessions": [
@@ -50,9 +66,19 @@
       "createdAtMs": 1776653228826
     },
     {
-      "token": "a2704280-6e1c-4ea4-9af3-47b6a411ddc4",
+      "token": "a2704280-6e1c-4ea4-a9af3-47b6a411ddc4",
       "userId": "d410ab77-ad03-47f7-8505-3dcee22cd4b0",
       "createdAtMs": 1776653301142
+    },
+    {
+      "token": "ccf8d191-d511-4491-9c0a-01824e63a2b4",
+      "userId": "d15129c2-e4fc-4d87-8207-d8f1f9bb6274",
+      "createdAtMs": 1781387060774
+    },
+    {
+      "token": "2bd47752-d1e5-46de-877c-1747d63b018e",
+      "userId": "bc6dab1a-eec4-4d81-a8e9-742ea280da65",
+      "createdAtMs": 1781387558931
     }
   ]
 }
