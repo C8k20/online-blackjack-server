@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createDeck, handValue, shuffle } from "./deck.js";
-import type { GamePhase, PlayerSnapshot, RoomSnapshot } from "./types.js";
+import type { GamePhase, PlayerSnapshot, RankChangeSnapshot, RoomSnapshot } from "./types.js";
 import type { Store } from "./store.js";
+import { rankFromPoints, rankLossAmount, rankWinAmount } from "./ranking.js";
 
 export type RoomPlayer = {
   id: string;
@@ -24,6 +25,7 @@ export class GameRoom {
   currentPlayerId: string | null = null;
   outcomeMessage = "";
   private betsSettled = false;
+  rankChanges: RankChangeSnapshot[] = [];
 
   constructor(code: string) {
     this.code = code;
@@ -76,18 +78,19 @@ export class GameRoom {
   }
 
   /** Per-viewer: during `playing`, only your own hand is visible until the round ends (`finished`). */
-  snapshotForViewer(viewerPlayerId: string | null): RoomSnapshot {
+  snapshotForViewer(viewerPlayerId: string | null, store: Store): RoomSnapshot {
     const revealAll = this.phase === "lobby" || this.phase === "finished";
     return {
       code: this.code,
       hostPlayerId: this.hostPlayerId,
       phase: this.phase,
       players: this.players.map((p) =>
-        this.playerSnapshotForViewer(p, viewerPlayerId, revealAll),
+        this.playerSnapshotForViewer(p, viewerPlayerId, revealAll, store),
       ),
       currentPlayerId: this.currentPlayerId,
       outcomeMessage: this.outcomeMessage,
       deckRemaining: this.deck.length,
+      rankChanges: this.phase === "finished" ? this.rankChanges : [],
     };
   }
 
@@ -95,7 +98,9 @@ export class GameRoom {
     p: RoomPlayer,
     viewerPlayerId: string | null,
     revealAll: boolean,
+    store: Store,
   ): PlayerSnapshot {
+    const rank = store.getRankInfo(p.userId) ?? rankFromPoints(0);
     const isSelf = viewerPlayerId !== null && p.id === viewerPlayerId;
     const reveal = revealAll || isSelf;
     if (!reveal) {
@@ -109,6 +114,7 @@ export class GameRoom {
         bust: p.bust,
         stood: p.stood,
         handValue: null,
+        rank,
       };
     }
     return {
@@ -121,6 +127,7 @@ export class GameRoom {
       bust: p.bust,
       stood: p.stood,
       handValue: p.bust ? null : handValue(p.hand),
+      rank,
     };
   }
 
@@ -179,6 +186,7 @@ export class GameRoom {
     this.resetRoundState();
     this.phase = "playing";
     this.betsSettled = false;
+    this.rankChanges = [];
     this.outcomeMessage = "";
     this.deck = shuffle(createDeck());
     for (const p of this.players) {
@@ -296,15 +304,65 @@ export class GameRoom {
     this.currentPlayerId = nextId;
   }
 
+  private determineWinners(): RoomPlayer[] {
+    const alive = this.alive();
+    if (alive.length === 0) return [];
+    if (alive.length === 1) return [alive[0]];
+    const scores = alive.map((p) => ({ p, v: handValue(p.hand) }));
+    const best = Math.max(...scores.map((s) => s.v));
+    const top = scores.filter((s) => s.v === best).map((s) => s.p);
+    if (top.length >= 2) return [];
+    return [top[0]!];
+  }
+
+  private settleRankPoints(store: Store) {
+    const winners = this.determineWinners();
+    if (winners.length !== 1) {
+      this.rankChanges = [];
+      return;
+    }
+
+    const winner = winners[0]!;
+    const winnerTotal = handValue(winner.hand);
+    const winAmount = rankWinAmount(winnerTotal);
+    const changes: RankChangeSnapshot[] = [];
+
+    for (const p of this.players) {
+      if (p.id === winner.id) {
+        const r = store.addRankPoints(p.userId, winAmount);
+        if (r.ok) {
+          changes.push({
+            playerId: p.id,
+            delta: winAmount,
+            rankPoints: r.rankPoints,
+            rank: r.rank,
+          });
+        }
+      } else {
+        const currentRp = store.getRankPoints(p.userId) ?? 0;
+        const loss = rankLossAmount(currentRp);
+        const r = store.addRankPoints(p.userId, -loss);
+        if (r.ok) {
+          changes.push({
+            playerId: p.id,
+            delta: -loss,
+            rankPoints: r.rankPoints,
+            rank: r.rank,
+          });
+        }
+      }
+    }
+
+    this.rankChanges = changes;
+  }
+
   private settleBets(store: Store) {
     if (this.betsSettled) return;
     if (this.phase !== "finished") return;
     this.betsSettled = true;
 
-    // Determine winners/ties from the final room state.
     const alive = this.alive();
     if (alive.length === 0) {
-      // Everyone busted -> no change, refund all bets.
       for (const p of this.players) {
         if (p.bet > 0) {
           const r = store.addChips(p.userId, p.bet);
@@ -312,56 +370,48 @@ export class GameRoom {
           p.bet = 0;
         }
       }
-      return;
-    }
-
-    if (alive.length === 1) {
-      const w = alive[0];
-      // Winner gets profit equal to their bet => they receive 2*bet back (stake + winnings).
+    } else if (alive.length === 1) {
+      const w = alive[0]!;
       const prize = w.bet * 2;
       if (prize > 0) {
         const r = store.addChips(w.userId, prize);
         if (r.ok) w.chips = r.chips;
       }
       w.bet = 0;
-      // Losers already paid by staking their bet (no refund).
       for (const p of this.players) {
         if (p.id !== w.id) p.bet = 0;
       }
-      return;
-    }
+    } else {
+      const scores = alive.map((p) => ({ p, v: handValue(p.hand) }));
+      const best = Math.max(...scores.map((s) => s.v));
+      const top = scores.filter((s) => s.v === best).map((s) => s.p);
 
-    const scores = alive.map((p) => ({ p, v: handValue(p.hand) }));
-    const best = Math.max(...scores.map((s) => s.v));
-    const top = scores.filter((s) => s.v === best).map((s) => s.p);
-
-    if (top.length >= 2) {
-      // Tie -> top players get their chips back (no change).
-      for (const p of top) {
-        if (p.bet > 0) {
-          const r = store.addChips(p.userId, p.bet);
-          if (r.ok) p.chips = r.chips;
+      if (top.length >= 2) {
+        for (const p of top) {
+          if (p.bet > 0) {
+            const r = store.addChips(p.userId, p.bet);
+            if (r.ok) p.chips = r.chips;
+          }
+          p.bet = 0;
         }
-        p.bet = 0;
+        for (const p of this.players) {
+          if (!top.some((t) => t.id === p.id)) p.bet = 0;
+        }
+      } else {
+        const w = top[0]!;
+        const prize = w.bet * 2;
+        if (prize > 0) {
+          const r = store.addChips(w.userId, prize);
+          if (r.ok) w.chips = r.chips;
+        }
+        w.bet = 0;
+        for (const p of this.players) {
+          if (p.id !== w.id) p.bet = 0;
+        }
       }
-      // Others lose their bet (already staked).
-      for (const p of this.players) {
-        if (!top.some((t) => t.id === p.id)) p.bet = 0;
-      }
-      return;
     }
 
-    // Single winner in multi-alive case.
-    const w = top[0];
-    const prize = w.bet * 2;
-    if (prize > 0) {
-      const r = store.addChips(w.userId, prize);
-      if (r.ok) w.chips = r.chips;
-    }
-    w.bet = 0;
-    for (const p of this.players) {
-      if (p.id !== w.id) p.bet = 0;
-    }
+    this.settleRankPoints(store);
   }
 
   private maybeResolveInstantWin(store: Store) {

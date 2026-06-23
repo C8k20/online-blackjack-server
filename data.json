@@ -5,14 +5,32 @@
       "username": "testuser1",
       "passwordSalt": "db3c9ce6436493a560f3527eebb6eca7",
       "passwordHash": "c1386ad9e55ccab9a180bceb599a56296653cbd71146a9d80f51d14c03455015",
-      "chips": 1000
+      "chips": 1000,
+      "rankPoints": 0
     },
     {
       "id": "fe8fc43b-3603-4cb8-a4aa-d68ec3f1ec7d",
       "username": "testuser2",
       "passwordSalt": "08dfabb009e6a30368a205d88bc418c2",
       "passwordHash": "cc645a1277f816f747b15c6466e76c79e6c60437ef33f3114e80c749b9024d0e",
-      "chips": 1000
+      "chips": 1000,
+      "rankPoints": 0
+    },
+    {
+      "id": "03800299-f9f1-46d8-9a3a-dc46677cb543",
+      "username": "qwerty",
+      "passwordSalt": "f1a972f385f4c87ef4dbfe49b7de1430",
+      "passwordHash": "5c49a032504ad5c7f82a0464bb28c944fe28edeccc8621db05b6d3a92d95d2c0",
+      "chips": 927,
+      "rankPoints": 84
+    },
+    {
+      "id": "d410ab77-ad03-47f7-8505-3dcee22cd4b0",
+      "username": "qwerty2",
+      "passwordSalt": "565e4ba08477d609458ac2f5a36abaf4",
+      "passwordHash": "85a5749252ddedb73b2c184aab851672e2093709a984edb2bb3d5db9946a74ee",
+      "chips": 1026,
+      "rankPoints": 0
     }
   ],
   "sessions": [
@@ -25,6 +43,16 @@
       "token": "3c8e3b82-49d3-4ed6-9d33-a50d46002806",
       "userId": "fe8fc43b-3603-4cb8-a4aa-d68ec3f1ec7d",
       "createdAtMs": 1776652420971
+    },
+    {
+      "token": "c7dfdd9c-c370-4a0b-b0a8-8b0f2cf35047",
+      "userId": "03800299-f9f1-46d8-9a3a-dc46677cb543",
+      "createdAtMs": 1776653228826
+    },
+    {
+      "token": "a2704280-6e1c-4ea4-9af3-47b6a411ddc4",
+      "userId": "d410ab77-ad03-47f7-8505-3dcee22cd4b0",
+      "createdAtMs": 1776653301142
     }
   ]
 }

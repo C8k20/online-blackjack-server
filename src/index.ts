@@ -49,9 +49,9 @@ app.get("/me", (req, res) => {
   const t = bearerToken(req);
   const userId = store.userIdForToken(t);
   if (!userId) return res.status(401).json({ ok: false, error: "Unauthorized" });
-  const user = store.getUser(userId);
-  if (!user) return res.status(401).json({ ok: false, error: "Unauthorized" });
-  return res.json({ ok: true, userId: user.id, username: user.username, chips: user.chips });
+  const profile = store.publicProfile(userId);
+  if (!profile) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  return res.json({ ok: true, ...profile });
 });
 
 const server = http.createServer(app);
@@ -83,7 +83,7 @@ async function broadcastRoom(room: GameRoom) {
   const sockets = await io.in(room.code).fetchSockets();
   for (const s of sockets) {
     const viewerId = s.data.playerId;
-    s.emit("state", room.snapshotForViewer(viewerId ?? null));
+    s.emit("state", room.snapshotForViewer(viewerId ?? null, store));
   }
 }
 
@@ -138,7 +138,7 @@ io.on("connection", (socket) => {
       socket.data.playerId = host.id;
       socket.emit("room:joined", {
         myPlayerId: host.id,
-        room: room.snapshotForViewer(host.id),
+        room: room.snapshotForViewer(host.id, store),
       });
       void broadcastRoom(room);
       ack?.(null);
@@ -173,7 +173,7 @@ io.on("connection", (socket) => {
       socket.data.playerId = p.id;
       socket.emit("room:joined", {
         myPlayerId: p.id,
-        room: room.snapshotForViewer(p.id),
+        room: room.snapshotForViewer(p.id, store),
       });
       void broadcastRoom(room);
       ack?.(null);

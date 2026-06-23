@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { rankFromPoints, type RankInfo } from "./ranking.js";
 
 type UserRecord = {
   id: string;
@@ -8,6 +9,7 @@ type UserRecord = {
   passwordSalt: string;
   passwordHash: string;
   chips: number;
+  rankPoints: number;
 };
 
 type SessionRecord = {
@@ -31,8 +33,18 @@ function readDb(): DbShape {
   try {
     const raw = fs.readFileSync(p, "utf8");
     const parsed = JSON.parse(raw) as Partial<DbShape>;
+    const users = Array.isArray(parsed.users)
+      ? (parsed.users as Partial<UserRecord>[]).map((u) => ({
+          id: String(u.id ?? ""),
+          username: String(u.username ?? ""),
+          passwordSalt: String(u.passwordSalt ?? ""),
+          passwordHash: String(u.passwordHash ?? ""),
+          chips: typeof u.chips === "number" ? u.chips : 1000,
+          rankPoints: typeof u.rankPoints === "number" ? Math.max(0, u.rankPoints) : 0,
+        }))
+      : [];
     return {
-      users: Array.isArray(parsed.users) ? (parsed.users as UserRecord[]) : [],
+      users,
       sessions: Array.isArray(parsed.sessions) ? (parsed.sessions as SessionRecord[]) : [],
     };
   } catch {
@@ -82,6 +94,7 @@ export class Store {
       passwordSalt: salt,
       passwordHash: hashPassword(p, salt),
       chips: 1000,
+      rankPoints: 0,
     };
     this.db.users.push(user);
 
@@ -146,6 +159,45 @@ export class Store {
     u.chips = next;
     this.flush();
     return { ok: true, chips: u.chips };
+  }
+
+  getRankPoints(userId: string): number | null {
+    const u = this.getUser(userId);
+    return u ? u.rankPoints : null;
+  }
+
+  getRankInfo(userId: string): RankInfo | null {
+    const rp = this.getRankPoints(userId);
+    return rp == null ? null : rankFromPoints(rp);
+  }
+
+  addRankPoints(
+    userId: string,
+    delta: number,
+  ): { ok: true; rankPoints: number; rank: RankInfo } | { ok: false; error: string } {
+    const u = this.getUser(userId);
+    if (!u) return { ok: false, error: "User not found." };
+    u.rankPoints = Math.max(0, u.rankPoints + Math.floor(delta));
+    this.flush();
+    return { ok: true, rankPoints: u.rankPoints, rank: rankFromPoints(u.rankPoints) };
+  }
+
+  publicProfile(userId: string): {
+    userId: string;
+    username: string;
+    chips: number;
+    rankPoints: number;
+    rank: RankInfo;
+  } | null {
+    const u = this.getUser(userId);
+    if (!u) return null;
+    return {
+      userId: u.id,
+      username: u.username,
+      chips: u.chips,
+      rankPoints: u.rankPoints,
+      rank: rankFromPoints(u.rankPoints),
+    };
   }
 }
 
